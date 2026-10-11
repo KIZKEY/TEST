@@ -22,18 +22,37 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CourseMonitor/1.0)"}
 KEYWORDS = ["تسجيل", "التقديم", "معسكر", "دورة", "برنامج", "bootcamp", "apply", "register"]
 
 SITES = [
-    {"name": "أكاديمية طويق", "url": "PUT_URL_HERE", "selector": None, "keywords": KEYWORDS},
-    {"name": "الأكاديمية الرقمية السعودية", "url": "PUT_URL_HERE", "selector": None, "keywords": KEYWORDS},
+    # موقع طويق يحمّل المحتوى بالجافاسكربت، لذلك render=True (متصفح آلي)
+    {"name": "أكاديمية طويق - الرئيسية", "url": "https://tuwaiq.edu.sa", "selector": None, "keywords": KEYWORDS, "render": True},
+    {"name": "أكاديمية طويق - الأخبار", "url": "https://tuwaiq.edu.sa/news", "selector": None, "keywords": KEYWORDS, "render": True},
+    # صفحات تجميع إعلانات تعمل بدون متصفح آلي (إعلانات الأكاديمية الرقمية وبرامج التدريب المنتهي بالتوظيف)
+    {"name": "إعلانات الأكاديمية الرقمية (وظيفتك علينا)", "url": "https://www.wdeftksa.com/sa/company/611-alljobs-sda-edu-sa", "selector": None, "keywords": KEYWORDS},
+    {"name": "برامج التدريب المنتهي بالتوظيف (وظيفتك علينا)", "url": "https://www.wdeftksa.com/sa/category/training-to-employment-jobs", "selector": None, "keywords": KEYWORDS},
+    # أضف روابطك هنا (سدايا، مسك، تمهير...)
     {"name": "أكاديمية سدايا", "url": "PUT_URL_HERE", "selector": None, "keywords": KEYWORDS},
     {"name": "أكاديمية مسك", "url": "PUT_URL_HERE", "selector": None, "keywords": KEYWORDS},
     {"name": "تمهير", "url": "PUT_URL_HERE", "selector": None, "keywords": KEYWORDS},
 ]
 
 
-def fetch_lines(site):
+def get_html(site):
+    if site.get("render"):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            page = browser.new_page()
+            page.goto(site["url"], wait_until="networkidle", timeout=60000)
+            html = page.content()
+            browser.close()
+            return html
     r = requests.get(site["url"], headers=HEADERS, timeout=30)
     r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
+    return r.text
+
+
+def fetch_lines(site):
+    soup = BeautifulSoup(get_html(site), "html.parser")
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
