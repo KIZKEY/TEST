@@ -12,6 +12,8 @@ from bs4 import BeautifulSoup
 
 STATE_FILE = Path("state.json")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+TEST_NOTIFY = os.environ.get("TEST_NOTIFY", "").strip().lower() == "true"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CourseMonitor/1.0)"}
 
 # ------------------------------------------------------------------
@@ -41,9 +43,22 @@ def get_html(site):
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
-            page = browser.new_page()
-            page.goto(site["url"], wait_until="networkidle", timeout=60000)
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                ),
+                locale="ar-SA",
+            )
+            page = context.new_page()
+            page.goto(site["url"], wait_until="domcontentloaded", timeout=60000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                pass
+            page.wait_for_timeout(5000)
             html = page.content()
+            print(f"[debug] {site['name']}: title={page.title()!r} html_len={len(html)}")
             browser.close()
             return html
     r = requests.get(site["url"], headers=HEADERS, timeout=30)
@@ -75,22 +90,52 @@ def fetch_lines(site):
     return out[:500]
 
 
+def send_push(title, body, click=None):
+    """يرسل إشعارًا عبر ntfy ويطبع نتيجة الإرسال في السجل. يرجع True عند النجاح."""
+    if not NTFY_TOPIC:
+        print("[push] NTFY_TOPIC is empty: the secret is missing or has the wrong name")
+        return False
+    headers = {"Title": title, "Priority": "high"}
+    if click:
+        headers["Click"] = click
+    try:
+        r = requests.post(
+            f"{NTFY_SERVER}/{NTFY_TOPIC}",
+            data=body.encode("utf-8"),
+            headers=headers,
+            timeout=30,
+        )
+        print(f"[push] sent to topic of length {len(NTFY_TOPIC)}, HTTP {r.status_code}")
+        return r.ok
+    except Exception as e:
+        print(f"[push] failed: {e}")
+        return False
+
+
 def notify(site, new_lines):
     body = f"{site['name']}\n" + "\n".join(f"- {l[:140]}" for l in new_lines[:5])
     print("ALERT:\n" + body)
-    if not NTFY_TOPIC:
-        print("NTFY_TOPIC is not set; skipping push.")
-        return
-    requests.post(
-        f"https://ntfy.sh/{NTFY_TOPIC}",
-        data=body.encode("utf-8"),
-        headers={"Title": "New course update", "Click": site["url"], "Priority": "high"},
-        timeout=30,
-    )
+    send_push("New course update", body, click=site["url"])
+
+
+def load_state():
+    if not STATE_FILE.exists():
+        return {}
+    try:
+        data = json.loads(STATE_FILE.read_text("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"[warn] state.json is not valid JSON ({e}); starting from a fresh baseline")
+        return {}
 
 
 def main():
-    state = json.loads(STATE_FILE.read_text("utf-8")) if STATE_FILE.exists() else {}
+    if TEST_NOTIFY:
+        ok = send_push("Test from course monitor", "إذا وصلك هذا الإشعار فالتنبيهات تعمل.")
+        print("[test] push OK" if ok else "[test] push FAILED")
+        sys.exit(0 if ok else 1)
+
+    state = load_state()
     failures = 0
 
     for site in SITES:
@@ -108,7 +153,7 @@ def main():
         if not lines:
             print(f"[warn] {site['name']}: no matching text (page may be JavaScript-rendered)")
 
-        if url not in state:
+        if not state.get(url):
             print(f"[baseline] {site['name']}: saved {len(lines)} lines")
         else:
             old = set(state[url])
